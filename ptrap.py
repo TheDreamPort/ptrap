@@ -8,6 +8,11 @@ import requests
 import requests_toolbelt
 import sys
 import urllib3
+from scapy.all import *
+import ipaddress
+import json
+from scapy.layers.http import HTTPRequest # import HTTP packet
+from scapy.layers.http import HTTP
 
 CURRENT_DIRECTORY = os.path.dirname( os.path.abspath(__file__) )
 SOURCE_DIRECTORY = os.path.join( CURRENT_DIRECTORY, 'src' )
@@ -69,10 +74,30 @@ def read_properties( arguments, logger ):
         logger.debug( "all read" )
         return our_configuration
 
+def process_packet(packet, data):
+    """
+    This function is executed whenever a packet is sniffed
+    """
+    if packet.haslayer(HTTPRequest):
+        # if this packet is an HTTP Request
+        # get the requested URL
+        url = packet[HTTPRequest].Host.decode() + packet[HTTPRequest].Path.decode()
+        # get the requester's IP Address
+        ip = packet[IP].src
+        # get the request method
+        reqmethod = packet[HTTPRequest].Method.decode()
+        c = {'url' : url,
+            'ip' : ip,
+            'reqmethod' :reqmethod}
+        data['HTTPRequests'].append(c)
+
+        
+        
+
 def parse_arguments():
     parser = argparse.ArgumentParser()
 
-    parser.add_argument('action', metavar='ACTION', type=str, help='Specify action for {}'.format(NAME) )
+    #parser.add_argument('action', metavar='ACTION', type=str, help='Specify action for {}'.format(NAME) )
 
     parser.add_argument('-C', '--configfile', help="Specify an alternate project configuration filename. Default is ~/.{}/{}.ini".format(NAME,NAME))
 
@@ -81,11 +106,14 @@ def parse_arguments():
     parser.add_argument('-L', '--loglevel', help="Specify alternate logging level. (Default is NONE)")
     
     parser.add_argument('-O', '--outputfile', help="Specify output location")
+   
+    parser.add_argument('-p', '--pcapreader', help="Call on a specified .pcap file for analysis")
 
     parser.add_argument('-q', '--quiet', action='store_true', help="Supress logging. Default is FALSE") 
 
     return parser.parse_args()
 
+#This is the Entry Point
 if __name__ == "__main__":
     arguments = parse_arguments( )
 
@@ -103,3 +131,54 @@ if __name__ == "__main__":
 
     logger.info( '{} startup'.format(NAME) )
     our_properties = read_properties( arguments, logger )
+
+
+#########################################################################################
+#################This is the Starting point for you to work##############################
+
+
+    # rdpcap comes from scapy and loads in our pcap file
+    #packets = rdpcap('example.pcap')  #>>>>> this line is leftover from https://incognitjoe.github.io/reading-pcap-with-scapy.html >>>>  it is calling on a .pcap file with a very specific name. We want to call on an arugment for any .pcap file to make things more efficient.
+    packets = rdpcap(arguments.pcapreader)
+    data = {}
+
+    data['IP'] = {}
+    data['IP']['src.addr'] = []
+    data['IP']['dst.addr'] = []
+
+    data['DNSrequest'] = []
+
+    data['HTTPRequests'] = []
+    data['HTTPResponses'] = []
+
+    # Let's iterate through every packet
+    for packet in packets:
+        # We're only interested packets with a DNS Round Robin layer
+        
+        
+        
+        if packet.haslayer(IP):
+            s = packet[IP].src
+            d = packet[IP].dst
+            so = ipaddress.ip_address(s) #so = source output
+            do = ipaddress.ip_address(d) #do = destination output
+            if not so.is_private and not so.is_multicast and not so.is_loopback: # if o.is_private != True: >>>> this works too, but it's just not as efficient
+                data['IP']['src.addr'].append(str(s))#, packet[IP].dst) for packet in PcapReader('file.pcap') if IP in packet)
+            if not do.is_private and not do.is_multicast and not so.is_loopback: # if o.is_private != True: >>>> this works too, but it's just not as efficient
+                data['IP']['dst.addr'].append(str(d))#, packet[IP].dst) for packet in PcapReader('file.pcap') if IP in packet)
+            
+            if packet.haslayer(DNSRR): #DNSRR = scapy object for DNS
+            # If the an(swer) is a DNSRR, print the name it replied with.
+                if isinstance(packet.an, DNSRR):
+                    data['DNSrequest'].append(str(packet.an.rrname.decode('UTF-8'))) #This saves the DNS Requests into the data[] list
+            elif packet.haslayer(HTTP):
+                process_packet(packet, data)
+
+
+
+    data['DNSrequest']=set(data['DNSrequest']) #This changes the data[] list into a "set" >>> sets DO NOT allow duplicates
+    data['IP']['src.addr']=set(data['IP']['src.addr']) #This changes the data[] list into a "set" >>> sets DO NOT allow duplicates
+    data['IP']['dst.addr']=set(data['IP']['dst.addr']) #This changes the data[] list into a "set" >>> sets DO NOT allow duplicates
+    # print(data['IP'])
+    print(data)
+    #print(json.dumps(data, indent=4))
